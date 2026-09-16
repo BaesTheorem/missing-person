@@ -27,6 +27,7 @@ os.environ["MP_CASES_DIR"] = str(REPO / "cases")
 
 from missing_person import case as case_mod
 from missing_person.geo import separation, zip_conflicts
+from missing_person import scan as scan_mod
 from missing_person.match import rank, score
 from missing_person.net import SourceError
 from missing_person import documents as docs_mod
@@ -303,3 +304,30 @@ def test_documents_are_stored_beside_the_case_not_in_the_repo(tmp_path) -> None:
     where = docs_mod.store_dir("some-case", cases)
     assert where == tmp_path / "documents" / "some-case"
     assert REPO not in where.parents
+
+
+# --- scan tolerates a dead source -------------------------------------------
+
+def test_scan_survives_mshp_outage(example: case_mod.Case, monkeypatch) -> None:
+    """A transient outage of one feed used to raise out of the whole run, so
+    nothing was saved and the only trace was a non-zero exit in a launchd log."""
+    def boom(*_a, **_k):
+        raise SourceError("MSHP returned no results table")
+    monkeypatch.setattr(scan_mod.mshp, "search_missing", boom)
+    monkeypatch.setattr(scan_mod.namus, "unidentified", lambda *a, **k: [])
+    monkeypatch.setattr(scan_mod.news, "scan", lambda *a, **k: [])
+    r = scan_mod.run(example)
+    assert "mshp" in r.failures
+    assert r.ncic_active(example) is None, "a feed that did not answer is not 'inactive'"
+
+
+def test_scan_reports_active_when_feed_answers(example: case_mod.Case, monkeypatch) -> None:
+    from missing_person.sources.mshp import MissingListing
+    hit = MissingListing(name="PERSON, EXAMPLE Q", sex="Male", race="White",
+                         missing_since=None, age_missing="30", agency="X", missing_from="Y",
+                         kind="ADULT", poster_url=None, photo_url=None)
+    monkeypatch.setattr(scan_mod.mshp, "search_missing", lambda *a, **k: [hit])
+    monkeypatch.setattr(scan_mod.namus, "unidentified", lambda *a, **k: [])
+    monkeypatch.setattr(scan_mod.news, "scan", lambda *a, **k: [])
+    r = scan_mod.run(example)
+    assert r.ncic_active(example) is True

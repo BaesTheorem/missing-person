@@ -23,6 +23,8 @@ class CaseState:
     namus_modified: str = ""
     seen_articles: list[str] = field(default_factory=list)
     top_candidates: list[str] = field(default_factory=list)
+    # source -> consecutive runs it has failed; reset to 0 on success
+    source_failures: dict[str, int] = field(default_factory=dict)
     checked_at: str = ""
     history: list[dict[str, Any]] = field(default_factory=list)
 
@@ -47,6 +49,7 @@ class CaseState:
             "namus_modified": self.namus_modified,
             "seen_articles": self.seen_articles[-300:],
             "top_candidates": self.top_candidates,
+            "source_failures": self.source_failures,
             "checked_at": self.checked_at,
             "history": self.history[-200:],
         }
@@ -65,6 +68,7 @@ def load(case_id: str) -> CaseState:
         namus_modified=raw.get("namus_modified", ""),
         seen_articles=list(raw.get("seen_articles", [])),
         top_candidates=list(raw.get("top_candidates", [])),
+        source_failures=dict(raw.get("source_failures", {})),
         checked_at=raw.get("checked_at", ""),
         history=list(raw.get("history", [])),
     )

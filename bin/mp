@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from missing_person import case as case_mod
 from missing_person import documents as docs_mod
-from missing_person import geo, report, state
+from missing_person import geo, report, scan as scan_mod, state
 from missing_person.match import rank
 from missing_person.net import SourceError
 from missing_person.sources import mshp, namus, news, usgs
@@ -243,69 +243,78 @@ def cmd_area(args: argparse.Namespace) -> int:
     return 0
 
 
-def _scan(c: case_mod.Case) -> tuple:
-    listings, resolved, modified = _status(c)
-    records = namus.unidentified(c.search_states, found_on_or_after=c.recovery_floor)
-    candidates = rank(c, records, minimum=0.55)
-    try:
-        articles = news.scan(c.news_terms, c.mshp_last, c.locality_terms)
-    except SourceError as exc:
-        print(f"note: news feeds failed ({exc})", file=sys.stderr)
-        articles = []
-    return listings, resolved, modified, candidates, articles
+def _report_failures(r: scan_mod.ScanResult) -> None:
+    for source, err in r.failures.items():
+        print(f"   !! {source} did not answer: {err[:160]}", file=sys.stderr)
 
 
 def cmd_scan(args: argparse.Namespace) -> int:
     c = _case(args)
     warnings = _document_warnings(c)
-    listings, resolved, modified, candidates, articles = _scan(c)
+    r = scan_mod.run(c)
     for warning in warnings:
         print(f"   !! {warning}", file=sys.stderr)
-    print(report.terminal(c, listings, resolved, candidates, articles))
-    body = report.render_note(c, listings, resolved, modified, candidates, articles,
-                              datetime.now().astimezone())
+    _report_failures(r)
+    print(report.terminal(c, r.listings, r.namus_resolved, r.candidates, r.articles))
+    body = report.render_note(c, r.listings, r.namus_resolved, r.namus_modified,
+                              r.candidates, r.articles, datetime.now().astimezone())
     path = report.write_note(c, body)
     print(f"\n   note: {path}")
-    return 0
+    return 2 if r.failures else 0
 
 
 def cmd_watch(args: argparse.Namespace) -> int:
-    """Run a scan and speak only when something actually changed."""
+    """Run a scan and speak only when something actually changed.
+
+    A source that did not answer is NOT read as 'no change' and NOT read as a
+    change either. Its previous value is kept, the failure is counted, and a
+    source that has failed on consecutive runs becomes a finding of its own.
+    """
     c = _case(args)
     st = state.load(c.id)
-    listings, resolved, modified, candidates, articles = _scan(c)
-    active = any(c.mshp_last.lower() in m.name.lower()
-                 and c.mshp_first.lower() in m.name.lower() for m in listings)
+    r = scan_mod.run(c)
+    _report_failures(r)
     changes: list[str] = []
 
-    if st.ncic_active is not None and st.ncic_active != active:
-        changes.append("NCIC listing went ACTIVE" if active
-                       else "NCIC listing CLEARED -- call the agency")
-    if st.namus_resolved is not None and st.namus_resolved != resolved:
-        changes.append(f"NamUs resolved flag flipped to {resolved}")
-    if st.namus_modified and modified[:19] != st.namus_modified[:19]:
-        changes.append(f"NamUs record edited ({modified[:10]})")
+    active = r.ncic_active(c)
+    if active is not None:
+        if st.ncic_active is not None and st.ncic_active != active:
+            changes.append("NCIC listing went ACTIVE" if active
+                           else "NCIC listing CLEARED -- call the agency")
+        st.ncic_active = active
+    if "namus_case" not in r.failures:
+        if st.namus_resolved is not None and st.namus_resolved != r.namus_resolved:
+            changes.append(f"NamUs resolved flag flipped to {r.namus_resolved}")
+        if st.namus_modified and r.namus_modified[:19] != st.namus_modified[:19]:
+            changes.append(f"NamUs record edited ({r.namus_modified[:10]})")
+        st.namus_resolved = r.namus_resolved
+        st.namus_modified = r.namus_modified
+    if "news" not in r.failures:
+        fresh = [a for a in r.articles if a.key not in set(st.seen_articles)]
+        if fresh:
+            changes.append(f"{len(fresh)} new article(s): {fresh[0].title[:70]}")
+        st.seen_articles = list(dict.fromkeys(st.seen_articles + [a.key for a in r.articles]))
+    if "namus_unidentified" not in r.failures:
+        top = [cand.record.case_id for cand in r.candidates[:10]]
+        new_candidates = [x for x in top if x not in set(st.top_candidates)]
+        if new_candidates and st.top_candidates:
+            changes.append(f"new unidentified candidate(s): {', '.join(new_candidates)}")
+        st.top_candidates = top
 
-    fresh = [a for a in articles if a.key not in set(st.seen_articles)]
-    if fresh:
-        changes.append(f"{len(fresh)} new article(s): {fresh[0].title[:70]}")
+    for source in ("mshp", "namus_case", "namus_unidentified", "news"):
+        if source in r.failures:
+            st.source_failures[source] = st.source_failures.get(source, 0) + 1
+            if st.source_failures[source] >= 2:
+                changes.append(f"{source} has failed {st.source_failures[source]} runs running")
+        else:
+            st.source_failures[source] = 0
 
-    top = [cand.record.case_id for cand in candidates[:10]]
-    new_candidates = [x for x in top if x not in set(st.top_candidates)]
-    if new_candidates and st.top_candidates:
-        changes.append(f"new unidentified candidate(s): {', '.join(new_candidates)}")
-
-    st.ncic_active = active
-    st.namus_resolved = resolved
-    st.namus_modified = modified
-    st.seen_articles = list(dict.fromkeys(st.seen_articles + [a.key for a in articles]))
-    st.top_candidates = top
     for change in changes:
         st.note("change", change)
     st.save()
 
-    body = report.render_note(c, listings, resolved, modified, candidates, articles,
-                              datetime.now().astimezone())
+    body = report.render_note(c, r.listings, r.namus_resolved, r.namus_modified,
+                              r.candidates, r.articles, datetime.now().astimezone())
     note_path = report.write_note(c, body)
 
     if changes:
@@ -314,7 +323,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
         print("CHANGED:\n  " + "\n  ".join(changes))
     else:
         print(f"no change ({report.days_missing(c)} days missing)")
-    return 0
+    return 2 if r.failures else 0
 
 
 def main() -> int:
