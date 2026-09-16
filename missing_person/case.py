@@ -106,6 +106,12 @@ class Location:
     # against the ZIP a location actually falls in, and that comparison has
     # resolution the distance calculation does not.
     zcta: str = ""
+    # Whether this point is worth putting boots on. A ZIP or city centroid is
+    # a legitimate record of what a source asserted AND a useless search
+    # target: mapping terrain around it maps terrain around an arbitrary spot
+    # inside a postal area. Defaults to True, and defaults to False for
+    # anything coarser than a mile, because that is the honest default.
+    searchable: bool = True
 
 
 @dataclass(frozen=True)
@@ -133,6 +139,11 @@ class Case:
     @property
     def primary_location(self) -> Location:
         return self.locations[0]
+
+    @property
+    def search_locations(self) -> list[Location]:
+        """Locations precise enough that searching around them means something."""
+        return [loc for loc in self.locations if loc.searchable]
 
 
 def _pair(raw: Any, what: str) -> tuple[int, int]:
@@ -166,6 +177,7 @@ def load(case_id: str) -> Case:
             note=loc.get("note", ""),
             precision_mi=float(loc.get("precision_mi", 0.25)),
             zcta=str(loc.get("zcta", "")),
+            searchable=bool(loc.get("searchable", float(loc.get("precision_mi", 0.25)) <= 1.0)),
         )
         for loc in raw["locations"]
     ]

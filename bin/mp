@@ -134,7 +134,16 @@ def cmd_news(args: argparse.Namespace) -> int:
 
 def cmd_area(args: argparse.Namespace) -> int:
     c = _case(args)
-    targets = c.locations if args.all_locations else [c.primary_location]
+    targets = c.search_locations if args.all_locations else c.search_locations[:1]
+    if args.include_coarse:
+        targets = c.locations if args.all_locations else [c.primary_location]
+    skipped = [loc for loc in c.locations if loc not in targets]
+    for loc in skipped:
+        print(f"   skipping {loc.label} (+/-{loc.precision_mi} mi): too coarse to "
+              f"search around. Use --include-coarse to override.")
+    if not targets:
+        print("   No location in this case is precise enough to search around.")
+        return 1
     for loc in targets:
         print(f"\n== {loc.label} ({loc.source}) -- {args.radius} mi radius ==")
         for label, url in geo.map_links(loc, args.radius).items():
@@ -262,7 +271,9 @@ def main() -> int:
     sp.add_argument("--per-kind", type=int, default=8)
     sp.add_argument("--kinds", nargs="*", choices=list(geo.FEATURE_QUERIES))
     sp.add_argument("--all-locations", action="store_true",
-                    help="every competing last-seen claim, not just the primary")
+                    help="every searchable last-seen claim, not just the first")
+    sp.add_argument("--include-coarse", action="store_true",
+                    help="also map around centroid-precision points (rarely useful)")
     sp.set_defaults(fn=cmd_area)
 
     with_case("scan", "full sweep into an Obsidian note").set_defaults(fn=cmd_scan)
