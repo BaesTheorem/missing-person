@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
 
-from missing_person.net import get_json, post_json
+from missing_person.net import SourceError, get_json, post_json
 
 BASE = "https://www.namus.gov/api/CaseSets/NamUs"
 CASE_URL = "https://www.namus.gov/MissingPersons/Case#/{}"
@@ -103,6 +103,25 @@ def discover_fields(case_set: str, candidates: list[str]) -> list[str]:
         bad = {part.split('"')[1] for part in str(exc).split("Invalid field name ")[1:]
                if '"' in part}
         return [c for c in candidates if c not in bad]
+
+
+def field_is_ever_published(field: str, sample: list[int]) -> tuple[int, int]:
+    """How many of `sample` expose `field`. The control before reading a blank.
+
+    Returns (populated, fetched). A result of (0, n) means the API never
+    publishes this field, so its emptiness on any one case is not evidence of
+    anything. Anything above 0 means a blank is genuinely a blank.
+    """
+    populated = fetched = 0
+    for number in sample:
+        try:
+            record = missing_case(number)
+        except SourceError:
+            continue
+        fetched += 1
+        if record.get(field) not in (None, [], {}):
+            populated += 1
+    return populated, fetched
 
 
 def _dt(value: str | None) -> date | None:
