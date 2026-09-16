@@ -134,7 +134,7 @@ def water_near(lat: float, lon: float, radius_mi: float = 2.0) -> list[Water]:
 
     So: named features key on the name, unnamed ones key on rounded position.
     """
-    seen: dict[tuple[str, str], Water] = {}
+    seen: dict[str, Water] = {}
     failures: list[str] = []
     for layer, kind in LAYERS.items():
         try:
@@ -166,8 +166,11 @@ def water_near(lat: float, lon: float, radius_mi: float = 2.0) -> list[Water]:
                 lat=nearest[0], lon=nearest[1],
                 distance_mi=round(_haversine_mi(lat, lon, nearest[0], nearest[1]), 2),
             )
-            key = ((name.lower(), label) if name
-                   else (round(item.lat, 4), round(item.lon, 4), label))
+            # One key type, not a union: named features key on the name so a
+            # segmented creek collapses, unnamed ones key on rounded position
+            # so genuinely distinct ponds do not.
+            key = (f"n:{name.lower()}|{label}" if name
+                   else f"p:{item.lat:.4f},{item.lon:.4f}|{label}")
             if key not in seen or item.distance_mi < seen[key].distance_mi:
                 seen[key] = item
     if failures and not seen:
