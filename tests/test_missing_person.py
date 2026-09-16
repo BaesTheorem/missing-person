@@ -29,6 +29,7 @@ from missing_person import case as case_mod
 from missing_person.geo import separation, zip_conflicts
 from missing_person.match import rank, score
 from missing_person.net import SourceError
+from missing_person import documents as docs_mod
 from missing_person.sources import mshp, news
 from missing_person.sources.namus import UnidentifiedRecord
 
@@ -236,3 +237,69 @@ def test_missing_zip_is_not_a_conflict() -> None:
     """An unknown ZIP must not read as a disagreement."""
     assert zip_conflicts([_loc("a", 39.1, -94.6, 0.25, ""),
                           _loc("b", 39.2, -94.6, 0.25, "64154")]) == []
+
+
+# --- source documents -------------------------------------------------------
+
+def test_garbage_extraction_is_rejected() -> None:
+    """The control that would have caught the subset-font bug.
+
+    This fixture is the REAL failure signature, not a tidied version of it. A
+    byte-level read of a Type0 subset font leaves the high NUL between every
+    glyph and shifts the visible bytes off ASCII. An earlier version of this
+    test used a space-separated fixture, which was easier to read and which
+    two different broken heuristics both passed.
+    """
+    naive = "".join(f"\x00{c}" for c in "81&/$66,),(\x12\x1238%/,&$:$5(1(66")
+    assert not docs_mod.looks_like_text(naive)
+
+
+def test_all_digits_is_not_a_successful_decode() -> None:
+    assert not docs_mod.looks_like_text("1234567890 " * 10)
+
+
+def test_real_prose_passes_the_text_check() -> None:
+    assert docs_mod.looks_like_text(
+        "Jacob was last seen on 04/22/2026 at 4:00pm in the 8600 block of "
+        "N Helena Ave in Kansas City, Missouri.")
+
+
+def test_too_short_to_judge_is_not_accepted() -> None:
+    """A handful of characters cannot demonstrate a working decode."""
+    assert not docs_mod.looks_like_text("abc")
+
+
+def test_extraction_refuses_rather_than_returns_unreadable_output(tmp_path) -> None:
+    """A fallback that fails loudly is fine. One that lies is worse than none."""
+    bogus = tmp_path / "x.pdf"
+    bogus.write_bytes(b"%PDF-1.4\nstream\nBT (\x00A\x00B) Tj ET\nendstream\n")
+    with pytest.raises(SourceError):
+        docs_mod.extract(bogus)
+
+
+def test_tounicode_bfrange_is_expanded() -> None:
+    """bfrange maps a span of glyph codes; reading only bfchar loses most text."""
+    stream = (b"begincmap 2 beginbfrange\n<0003><0003><0020>\n"
+              b"<0024><0026><0041>\nendbfrange endcmap")
+    cmap = docs_mod._tounicode([stream])
+    assert cmap[0x03] == " "
+    assert cmap[0x24] == "A"
+    assert cmap[0x26] == "C", "the range end must be inclusive"
+
+
+def test_tounicode_bfchar_pairs() -> None:
+    stream = b"begincmap 1 beginbfchar\n<0041><0061>\nendbfchar endcmap"
+    assert docs_mod._tounicode([stream])[0x41] == "a"
+
+
+def test_document_slug_is_stable_and_filesystem_safe() -> None:
+    d = docs_mod.Document(label="MSHP/NCIC Bulletin (PDF)", url="https://x.invalid/a.pdf")
+    assert d.slug == "mshp-ncic-bulletin-pdf"
+
+
+def test_documents_are_stored_beside_the_case_not_in_the_repo(tmp_path) -> None:
+    """Source documents are case material about a real person."""
+    cases = tmp_path / "cases"
+    where = docs_mod.store_dir("some-case", cases)
+    assert where == tmp_path / "documents" / "some-case"
+    assert REPO not in where.parents

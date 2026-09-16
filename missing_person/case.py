@@ -115,6 +115,21 @@ class Location:
 
 
 @dataclass(frozen=True)
+class Document:
+    """A source document the case cites, e.g. an agency bulletin PDF.
+
+    Carried as structured data rather than a bare link because a link is not a
+    read: this case listed its NCIC bulletin as a URL for a full day while the
+    only specific address any source gave sat unread inside it.
+    """
+
+    label: str
+    url: str
+    kind: str = "pdf"
+    note: str = ""
+
+
+@dataclass(frozen=True)
 class Case:
     id: str
     display_name: str
@@ -134,6 +149,8 @@ class Case:
     search_states: list[str]
     news_terms: list[str]
     locality_terms: list[str]
+    documents: list[Document] = field(default_factory=list)
+    cases_dir: Path = REPO_CASES
     links: dict[str, str] = field(default_factory=dict)
 
     @property
@@ -205,6 +222,12 @@ def load(case_id: str) -> Case:
         search_states=list(c.get("search_states", [])),
         news_terms=list(c.get("news_terms", [])),
         locality_terms=list(c.get("locality_terms", [])),
+        documents=[
+            Document(label=d["label"], url=d["url"], kind=d.get("kind", "pdf"),
+                     note=d.get("note", ""))
+            for d in raw.get("documents", [])
+        ],
+        cases_dir=path.parent,
         links=dict(raw.get("links", {})),
     )
 

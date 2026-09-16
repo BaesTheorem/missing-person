@@ -35,6 +35,7 @@ Python 3.11+. Standard library only. No venv, no dependencies.
     bin/mp unidentified <case>    rank unidentified-person candidates
     bin/mp news <case>            newsroom sweep
     bin/mp area <case>            terrain around each last-seen claim
+    bin/mp docs <case>            fetch and read the case's source documents
     bin/mp scan <case>            everything, into a markdown note
     bin/mp watch <case>           scan, notify ONLY on a change
 
@@ -51,6 +52,27 @@ here. Case ids resolve in this order:
 Directories are searched in order and unioned, so a private case shadows a
 same-named example. Copy `cases/example.toml`, fill it in, and put it in one
 of the first two.
+
+## Source documents: a link is not a read
+
+The single most consequential fact in the case this was built for, the only
+specific street address any source gave, sat inside an agency PDF that the
+case file had listed as a URL from its first version. It went unread for a
+full day while every API was re-litigated against every other API.
+
+So `[[documents]]` blocks are fetched and text-extracted, on demand via
+`mp docs` and automatically on every `mp scan`, and an unread one is reported
+loudly rather than sitting quiet. Documents are stored beside the case file,
+outside this repo, because they are material about a real person.
+
+Extraction prefers `pdftotext` and falls back to pure stdlib. Getting the
+fallback right mattered more than expected: a naive inflate-and-read returns
+**confident garbage** on any PDF with a subset font, because Type0 glyph codes
+are two bytes and sit off ASCII. It produced 14KB of output that looked like
+text, contained not one fact from the document, and raised nothing. The
+fallback now parses the font's ToUnicode CMap, and `looks_like_text` refuses
+output that fails a decode check. A fallback that fails loudly is fine; one
+that lies is worse than having none.
 
 ## What each source is actually good for
 

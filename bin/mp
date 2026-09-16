@@ -28,6 +28,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from missing_person import case as case_mod
+from missing_person import documents as docs_mod
 from missing_person import geo, report, state
 from missing_person.match import rank
 from missing_person.net import SourceError
@@ -115,6 +116,51 @@ def cmd_unidentified(args: argparse.Namespace) -> int:
         print(f"  {c.agency} at {c.agency_phones.get('missing_persons','')}, not to a")
         print("  medical examiner directly.")
     return 0
+
+
+def cmd_docs(args: argparse.Namespace) -> int:
+    c = _case(args)
+    if not c.documents:
+        print("No source documents listed for this case.")
+        print("Add [[documents]] blocks to the case file; agency bulletins and")
+        print("poster PDFs routinely carry detail that no API exposes.")
+        return 0
+    failed = 0
+    for doc in c.documents:
+        st = docs_mod.state(_doc(doc), c.id, c.cases_dir)
+        try:
+            st = docs_mod.ensure(_doc(doc), c.id, c.cases_dir, refetch=args.refetch)
+        except SourceError as exc:
+            print(f"  [FAILED] {doc.label}: {exc}")
+            failed += 1
+            continue
+        text = st.text()
+        print(f"\n== {doc.label} ==")
+        print(f"   {doc.url}")
+        print(f"   {st.path}  ({st.path.stat().st_size} bytes, "
+              f"{len(text)} chars of text)")
+        if args.show:
+            print("   " + "\n   ".join(text.splitlines()[: args.lines]))
+    return 2 if failed else 0
+
+
+def _doc(d) -> docs_mod.Document:
+    return docs_mod.Document(label=d.label, url=d.url, kind=d.kind, note=d.note)
+
+
+def _document_warnings(c) -> list[str]:
+    """Fetch anything new and report what could not be read.
+
+    Loud on purpose. The whole reason this feature exists is that a cited
+    document sat unread while every other source was being re-litigated.
+    """
+    out: list[str] = []
+    for doc in c.documents:
+        try:
+            docs_mod.ensure(_doc(doc), c.id, c.cases_dir)
+        except SourceError as exc:
+            out.append(f"UNREAD SOURCE DOCUMENT: {doc.label} -- {exc}")
+    return out
 
 
 def cmd_news(args: argparse.Namespace) -> int:
@@ -211,7 +257,10 @@ def _scan(c: case_mod.Case) -> tuple:
 
 def cmd_scan(args: argparse.Namespace) -> int:
     c = _case(args)
+    warnings = _document_warnings(c)
     listings, resolved, modified, candidates, articles = _scan(c)
+    for warning in warnings:
+        print(f"   !! {warning}", file=sys.stderr)
     print(report.terminal(c, listings, resolved, candidates, articles))
     body = report.render_note(c, listings, resolved, modified, candidates, articles,
                               datetime.now().astimezone())
@@ -307,6 +356,12 @@ def main() -> int:
     sp.add_argument("--include-coarse", action="store_true",
                     help="also map around centroid-precision points (rarely useful)")
     sp.set_defaults(fn=cmd_area)
+
+    sp = with_case("docs", "fetch and read the case's source documents")
+    sp.add_argument("--show", action="store_true", help="print extracted text")
+    sp.add_argument("--lines", type=int, default=40)
+    sp.add_argument("--refetch", action="store_true")
+    sp.set_defaults(fn=cmd_docs)
 
     with_case("scan", "full sweep into an Obsidian note").set_defaults(fn=cmd_scan)
     with_case("watch", "scan, notify only on change").set_defaults(fn=cmd_watch)
