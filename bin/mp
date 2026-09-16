@@ -228,6 +228,11 @@ def cmd_watch(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
+    # Line-buffer stdout. `mp area` and `mp unidentified` print progress across
+    # minutes of network work, and Python block-buffers stdout when it is not a
+    # tty. Redirected to a log or captured by a watcher, that made a slow run
+    # look identical to a hung one for 25 minutes.
+    sys.stdout.reconfigure(line_buffering=True)
     p = argparse.ArgumentParser(prog="mp", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
