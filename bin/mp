@@ -31,7 +31,7 @@ from missing_person import case as case_mod
 from missing_person import geo, report, state
 from missing_person.match import rank
 from missing_person.net import SourceError
-from missing_person.sources import mshp, namus, news
+from missing_person.sources import mshp, namus, news, usgs
 
 NOTIFY = Path.home() / "Documents" / "Exobrain harness" / "mist-voice" / "bin" / "mist-notify"
 
@@ -137,6 +137,7 @@ def cmd_area(args: argparse.Namespace) -> int:
     targets = c.search_locations if args.all_locations else c.search_locations[:1]
     if args.include_coarse:
         targets = c.locations if args.all_locations else [c.primary_location]
+    failed: list[str] = []
     skipped = [loc for loc in c.locations if loc not in targets]
     for loc in skipped:
         print(f"   skipping {loc.label} (+/-{loc.precision_mi} mi): too coarse to "
@@ -148,10 +149,35 @@ def cmd_area(args: argparse.Namespace) -> int:
         print(f"\n== {loc.label} ({loc.source}) -- {args.radius} mi radius ==")
         for label, url in geo.map_links(loc, args.radius).items():
             print(f"   {label}: {url}")
+        produced = False
+        # Water first, and from USGS rather than OSM. It is the federal
+        # dataset, and it answered every request on an afternoon when all
+        # three public Overpass endpoints were rate-limiting.
+        try:
+            water = usgs.water_near(loc.lat, loc.lon, args.radius)
+            produced = True
+            named = [w for w in water if w.name]
+            print(f"\n   WATER (USGS NHD): {len(water)} features, {len(named)} named")
+            for w in named:
+                print(f"     {w.distance_mi:>5.2f} mi  {w.ftype:<30} {w.name}")
+            print(f"     unnamed ponds/basins/channels, nearest {args.per_kind}:")
+            for w in [x for x in water if not x.name][: args.per_kind]:
+                print(f"     {w.distance_mi:>5.2f} mi  {w.ftype:<30} "
+                      f"{w.lat:.5f}, {w.lon:.5f}")
+            for ring in (0.5, 1.0):
+                print(f"     within {ring} mi: "
+                      f"{sum(1 for x in water if x.distance_mi <= ring)}")
+        except SourceError as exc:
+            print(f"   USGS hydrography unavailable: {exc}", file=sys.stderr)
+
         try:
             features = geo.features_near(loc, args.radius, kinds=args.kinds or None)
+            produced = True
         except SourceError as exc:
             print(f"   Overpass unavailable: {exc}", file=sys.stderr)
+            features = []
+        if not produced:
+            failed.append(loc.label)
             continue
         by_kind: dict[str, list[geo.Feature]] = {}
         for f in features:
@@ -162,6 +188,12 @@ def cmd_area(args: argparse.Namespace) -> int:
                 print(f"     {f.distance_mi:>5.2f} mi  {f.name[:46]:<46} {f.osm}")
     print("\n   Terrain, not a prediction. Coordinate with the agency and with any")
     print("   organised search before walking private land.")
+    if failed:
+        # An analysis that produced nothing must not exit 0. This returned
+        # success while every data source had failed, which is the exact
+        # silent failure the rest of this toolkit is built to avoid.
+        print(f"   NO DATA for: {', '.join(failed)}", file=sys.stderr)
+        return 2
     return 0
 
 
