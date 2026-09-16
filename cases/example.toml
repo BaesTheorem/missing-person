@@ -1,0 +1,76 @@
+# SYNTHETIC EXAMPLE. Not a real person, not a real case.
+#
+# It exists so the toolkit runs and the tests pass without any real case data
+# in this repository. Real case files name a living person and describe them,
+# so they live outside this repo (see missing_person/case.py for the search
+# order). Copy this file, fill it in, and put it in your cases directory.
+#
+# The shape here is doing deliberate work. Read the notes.
+
+[case]
+id = "example"
+display_name = "Example Person"
+legal_name = "Example Q. Person"
+aka = ["Ex"]
+last_seen_date = "2026-01-15"
+# Earliest date a recovery could still be this person. Set it to the EARLIEST
+# date ANY source claims, not the best-supported one. This bound EXCLUDES
+# candidates, and an over-tight bound throws away real leads.
+recovery_floor = "2026-01-10"
+clothing = "dark jacket, jeans"
+agency = "Example County Sheriff's Office"
+namus_mp = 0            # NamUs case number, or omit if not entered yet
+mshp_first = "Example"  # name as the state NCIC feed spells it
+mshp_last = "Person"
+# States whose unidentified-person records to sweep. Start local; widen with
+# `mp unidentified <case> --national` when a local sweep comes back empty.
+search_states = ["Missouri", "Kansas"]
+news_terms = ["Example Person"]
+# Place names that keep a common personal name attached to THIS case. Without
+# them a news sweep returns every athlete and obituary sharing the name.
+locality_terms = ["Example County", "Kansas City", "Missouri"]
+
+[description]
+sex = "Male"
+race = "White"
+age_at_disappearance = 30
+# RANGES, not points. Sources disagree about height and weight more often than
+# not, and filtering on one number silently discards the candidate the other
+# number would have caught.
+height_in = [68, 70]
+weight_lb = [150, 175]
+hair = "Brown"
+eyes = "Blue"
+
+# Every date any source asserts, with the source named. Cases routinely carry
+# three or four. Keeping them listed is how the discrepancy stays visible.
+[date_claims]
+"NCIC missing-since" = "2026-01-10"
+"Last confirmed contact" = "2026-01-14 about 9:00 PM"
+"Last camera observation" = "2026-01-15 about 1:15 AM"
+
+[agency_phones]
+missing_persons = "555-0100"
+emergency = "911"
+
+# One block per CLAIMED last-seen location, each with its provenance. Do not
+# reconcile them by picking a favourite: `mp status` reports the distance
+# between them, and a five-mile disagreement is a search-area question, not a
+# config tidiness problem.
+[[locations]]
+label = "Home address"
+source = "agency record"
+lat = 39.0997
+lon = -94.5786
+note = "Camera caught them leaving on foot."
+
+[[locations]]
+label = "Reported sighting, north side"
+source = "family flyer"
+lat = 39.1500
+lon = -94.6000
+note = "Approximate; the flyer names an intersection, not a coordinate."
+
+[links]
+"NamUs" = "https://www.namus.gov/MissingPersons"
+"Example agency page" = "https://example.invalid/missing"

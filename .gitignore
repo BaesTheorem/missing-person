@@ -1,0 +1,7 @@
+# Tips, family contact details, and anything a member of the public sends in.
+# Case facts that are on the public flyer live in cases/*.toml and are tracked.
+private/
+state/
+__pycache__/
+*.pyc
+.DS_Store

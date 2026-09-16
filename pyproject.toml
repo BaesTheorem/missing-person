@@ -1,0 +1,32 @@
+# Not a distributable package: this repo is a CLI plus the modules behind it,
+# run from a checkout with no install step and no dependencies. These settings
+# exist to keep the lint and type gates meaningful.
+
+[tool.ruff]
+target-version = "py311"
+
+[tool.ruff.lint]
+# Small and high-signal. Every rule here should be worth stopping an edit for.
+#   F      pyflakes (undefined names, unused imports)
+#   E4/7/9 pycodestyle errors that indicate real mistakes, not style
+#   B      bugbear (mutable defaults, silent excepts)
+#   SLF    private-member access across module boundaries
+#   RUF100 stale noqa directives
+select = ["F", "E4", "E7", "E9", "B", "SLF", "RUF100"]
+# E402: bin/mp and the tests sys.path.insert before importing the package,
+# which is the only way to run from a checkout without an install step.
+ignore = ["E401", "E402", "E701", "E702", "E731", "E741"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests reach into the parsers and matchers on purpose: the private helpers
+# ARE the units whose silent-failure modes the suite exists to pin down.
+"tests/**" = ["SLF001"]
+
+[tool.pyright]
+typeCheckingMode = "basic"
+exclude = ["**/__pycache__"]
+# pytest is a dev-only dependency and there is no venv to resolve it from.
+reportMissingImports = "none"
+reportMissingModuleSource = "none"
+reportUndefinedVariable = "error"
+reportCallIssue = "error"

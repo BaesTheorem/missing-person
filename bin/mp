@@ -1,0 +1,271 @@
+#!/usr/bin/env python3
+"""mp -- assist a public missing-person search from the command line.
+
+    mp cases                  list every case found in the search directories
+    mp status <case>          NCIC + NamUs case status, and the source conflicts
+    mp unidentified <case>    rank unidentified-person candidates
+    mp news <case>            newsroom feed sweep
+    mp area <case>            terrain around each last-seen point
+    mp scan <case>            all of the above, into a vault note
+    mp watch <case>           scan, and notify ONLY on a change
+
+Case files live outside this repo (a notes vault); see missing_person/case.py
+for the search order, and cases/example.toml for the format.
+
+Every source is public and read-only. Nothing here files, edits, or closes a
+case, and nothing here identifies anyone: unidentified-person output is a
+ranked list of leads for the investigating agency to evaluate.
+"""
+
+from __future__ import annotations
+
+import argparse
+import subprocess
+import sys
+from datetime import datetime
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from missing_person import case as case_mod
+from missing_person import geo, report, state
+from missing_person.match import rank
+from missing_person.net import SourceError
+from missing_person.sources import mshp, namus, news
+
+NOTIFY = Path.home() / "Documents" / "Exobrain harness" / "mist-voice" / "bin" / "mist-notify"
+
+
+def _notify(message: str, title: str, link: str) -> None:
+    if not NOTIFY.exists():
+        return
+    subprocess.run([str(NOTIFY), message, title, "default", link], check=False)
+
+
+def _case(args: argparse.Namespace) -> case_mod.Case:
+    return case_mod.load(args.case)
+
+
+def cmd_cases(_: argparse.Namespace) -> int:
+    for name in case_mod.available():
+        c = case_mod.load(name)
+        print(f"{name:<20} {c.display_name} -- missing {report.days_missing(c)} days, {c.agency}")
+    return 0
+
+
+def _status(c: case_mod.Case) -> tuple[list[mshp.MissingListing], bool | None, str]:
+    listings = mshp.search_missing(c.mshp_last, c.mshp_first)
+    resolved: bool | None = None
+    modified = ""
+    if c.namus_mp:
+        record = namus.missing_case(c.namus_mp)
+        resolved = bool(record.get("caseIsResolved"))
+        modified = str(record.get("modifiedDateTime") or "")
+    return listings, resolved, modified
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    c = _case(args)
+    listings, resolved, modified = _status(c)
+    print(f"{c.display_name} -- day {report.days_missing(c)} of the search\n")
+    for line in report.status_block(c, listings, resolved, modified):
+        print(line.replace("- ", "  ").replace("**", ""))
+    print("\n  Dates each source asserts:")
+    for label, value in c.date_claims.items():
+        print(f"    {label:<38} {value}")
+    print("\n  Last-seen claims:")
+    for loc in c.locations:
+        print(f"    {loc.label:<28} {loc.lat:.4f}, {loc.lon:.4f}  ({loc.source})")
+    for a, b, miles in geo.separation(c.locations):
+        print(f"    separation: {a} <-> {b} = {miles} mi")
+    return 0
+
+
+def cmd_unidentified(args: argparse.Namespace) -> int:
+    c = _case(args)
+    states = None if args.national else (args.states or c.search_states)
+    scope = "nationwide" if states is None else ", ".join(states)
+    print(f"Sweeping NamUs unidentified persons ({scope}), "
+          f"recovered on or after {c.recovery_floor}...")
+    records = namus.unidentified(states, found_on_or_after=c.recovery_floor)
+    print(f"  {len(records)} records in scope")
+    candidates = rank(c, records, minimum=args.min)
+    print(f"  {len(candidates)} consistent with the description "
+          f"(score >= {args.min})\n")
+    for cand in candidates[: args.limit]:
+        r = cand.record
+        ht = f"{r.height_in[0]}-{r.height_in[1]}in" if r.height_in else "ht ?"
+        wt = f"{r.weight_lb[0]}-{r.weight_lb[1]}lb" if r.weight_lb else "wt ?"
+        age = f"{r.age_est[0]}-{r.age_est[1]}y" if r.age_est else "age ?"
+        print(f"  {cand.score:.2f} cov {cand.coverage:.0%} {cand.stars:<5} {r.case_id:<10} found "
+              f"{r.date_found or '?'}  {r.city} {r.county} {r.state}")
+        print(f"        {age}, {ht}, {wt}, {r.hair} hair, {r.eyes} eyes")
+        print(f"        matched: {', '.join(cand.matched) or 'none'} | "
+              f"unknown: {', '.join(cand.unknown) or 'none'}")
+        print(f"        {r.url}")
+        if cand.note:
+            print(f"        note: {cand.note}")
+        print()
+    if candidates:
+        print("  These are LEADS, not identifications. Route anything worth a look to")
+        print(f"  {c.agency} at {c.agency_phones.get('missing_persons','')}, not to a")
+        print("  medical examiner directly.")
+    return 0
+
+
+def cmd_news(args: argparse.Namespace) -> int:
+    c = _case(args)
+    try:
+        articles = news.scan(c.news_terms, c.mshp_last, c.locality_terms)
+    except SourceError as exc:
+        print(f"feeds failed: {exc}", file=sys.stderr)
+        return 2
+    if not articles:
+        print("No mentions in the watched feeds (KSHB, FOX4, Google News).")
+        return 0
+    for a in articles[: args.limit]:
+        print(f"  {a.source}: {a.title}\n     {a.published}\n     {a.url}\n")
+    return 0
+
+
+def cmd_area(args: argparse.Namespace) -> int:
+    c = _case(args)
+    targets = c.locations if args.all_locations else [c.primary_location]
+    for loc in targets:
+        print(f"\n== {loc.label} ({loc.source}) -- {args.radius} mi radius ==")
+        for label, url in geo.map_links(loc, args.radius).items():
+            print(f"   {label}: {url}")
+        try:
+            features = geo.features_near(loc, args.radius, kinds=args.kinds or None)
+        except SourceError as exc:
+            print(f"   Overpass unavailable: {exc}", file=sys.stderr)
+            continue
+        by_kind: dict[str, list[geo.Feature]] = {}
+        for f in features:
+            by_kind.setdefault(f.kind, []).append(f)
+        for kind, items in by_kind.items():
+            print(f"\n   {kind} ({len(items)})")
+            for f in items[: args.per_kind]:
+                print(f"     {f.distance_mi:>5.2f} mi  {f.name[:46]:<46} {f.osm}")
+    print("\n   Terrain, not a prediction. Coordinate with the agency and with any")
+    print("   organised search before walking private land.")
+    return 0
+
+
+def _scan(c: case_mod.Case) -> tuple:
+    listings, resolved, modified = _status(c)
+    records = namus.unidentified(c.search_states, found_on_or_after=c.recovery_floor)
+    candidates = rank(c, records, minimum=0.55)
+    try:
+        articles = news.scan(c.news_terms, c.mshp_last, c.locality_terms)
+    except SourceError as exc:
+        print(f"note: news feeds failed ({exc})", file=sys.stderr)
+        articles = []
+    return listings, resolved, modified, candidates, articles
+
+
+def cmd_scan(args: argparse.Namespace) -> int:
+    c = _case(args)
+    listings, resolved, modified, candidates, articles = _scan(c)
+    print(report.terminal(c, listings, resolved, candidates, articles))
+    body = report.render_note(c, listings, resolved, modified, candidates, articles,
+                              datetime.now().astimezone())
+    path = report.write_note(c, body)
+    print(f"\n   note: {path}")
+    return 0
+
+
+def cmd_watch(args: argparse.Namespace) -> int:
+    """Run a scan and speak only when something actually changed."""
+    c = _case(args)
+    st = state.load(c.id)
+    listings, resolved, modified, candidates, articles = _scan(c)
+    active = any(c.mshp_last.lower() in m.name.lower()
+                 and c.mshp_first.lower() in m.name.lower() for m in listings)
+    changes: list[str] = []
+
+    if st.ncic_active is not None and st.ncic_active != active:
+        changes.append("NCIC listing went ACTIVE" if active
+                       else "NCIC listing CLEARED -- call the agency")
+    if st.namus_resolved is not None and st.namus_resolved != resolved:
+        changes.append(f"NamUs resolved flag flipped to {resolved}")
+    if st.namus_modified and modified[:19] != st.namus_modified[:19]:
+        changes.append(f"NamUs record edited ({modified[:10]})")
+
+    fresh = [a for a in articles if a.key not in set(st.seen_articles)]
+    if fresh:
+        changes.append(f"{len(fresh)} new article(s): {fresh[0].title[:70]}")
+
+    top = [cand.record.case_id for cand in candidates[:10]]
+    new_candidates = [x for x in top if x not in set(st.top_candidates)]
+    if new_candidates and st.top_candidates:
+        changes.append(f"new unidentified candidate(s): {', '.join(new_candidates)}")
+
+    st.ncic_active = active
+    st.namus_resolved = resolved
+    st.namus_modified = modified
+    st.seen_articles = list(dict.fromkeys(st.seen_articles + [a.key for a in articles]))
+    st.top_candidates = top
+    for change in changes:
+        st.note("change", change)
+    st.save()
+
+    body = report.render_note(c, listings, resolved, modified, candidates, articles,
+                              datetime.now().astimezone())
+    note_path = report.write_note(c, body)
+
+    if changes:
+        _notify(" | ".join(changes), f"{c.display_name}: case update",
+                f"obsidian://open?vault=Exobrain&file={note_path.stem}")
+        print("CHANGED:\n  " + "\n  ".join(changes))
+    else:
+        print(f"no change ({report.days_missing(c)} days missing)")
+    return 0
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(prog="mp", description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("cases", help="list configured cases").set_defaults(fn=cmd_cases)
+
+    def with_case(name: str, help_text: str) -> argparse.ArgumentParser:
+        sp = sub.add_parser(name, help=help_text)
+        sp.add_argument("case")
+        return sp
+
+    with_case("status", "NCIC + NamUs status").set_defaults(fn=cmd_status)
+
+    sp = with_case("unidentified", "rank unidentified-person candidates")
+    sp.add_argument("--national", action="store_true", help="sweep all states")
+    sp.add_argument("--states", nargs="*", help="override the case's state list")
+    sp.add_argument("--min", type=float, default=0.5, help="minimum score")
+    sp.add_argument("--limit", type=int, default=25)
+    sp.set_defaults(fn=cmd_unidentified)
+
+    sp = with_case("news", "newsroom feed sweep")
+    sp.add_argument("--limit", type=int, default=20)
+    sp.set_defaults(fn=cmd_news)
+
+    sp = with_case("area", "terrain around the last-seen point")
+    sp.add_argument("--radius", type=float, default=2.0, help="miles")
+    sp.add_argument("--per-kind", type=int, default=8)
+    sp.add_argument("--kinds", nargs="*", choices=list(geo.FEATURE_QUERIES))
+    sp.add_argument("--all-locations", action="store_true",
+                    help="every competing last-seen claim, not just the primary")
+    sp.set_defaults(fn=cmd_area)
+
+    with_case("scan", "full sweep into an Obsidian note").set_defaults(fn=cmd_scan)
+    with_case("watch", "scan, notify only on change").set_defaults(fn=cmd_watch)
+
+    args = p.parse_args()
+    try:
+        return int(args.fn(args))
+    except SourceError as exc:
+        print(f"source error: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

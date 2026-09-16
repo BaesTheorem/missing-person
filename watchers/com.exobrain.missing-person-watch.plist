@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.exobrain.missing-person-watch</string>
+  <!-- Absolute interpreter path, not /usr/bin/env: launchd does not inherit a
+       usable PATH, and this repo's launchd notes record sh-126 failures from
+       exactly that. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/python3</string>
+    <string>/Users/alexhedtke/Documents/missing-person/bin/mp</string>
+    <string>watch</string>
+    <!-- Replace with your case id. Real case files live outside this repo. -->
+    <string>CASE-ID</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/alexhedtke/Documents/missing-person</string>
+  <!-- Daily at 08:15. The sources refresh at most daily (MSHP is a nightly
+       NCIC pull), so anything more frequent is load without information. -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>8</integer>
+    <key>Minute</key><integer>15</integer>
+  </dict>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>/Users/alexhedtke/Library/Logs/exobrain/missing-person-watch.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/alexhedtke/Library/Logs/exobrain/missing-person-watch.err</string>
+</dict>
+</plist>
