@@ -12,7 +12,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from missing_person.case import Case
-from missing_person.geo import separation
+from missing_person.geo import separation, zip_conflicts
 from missing_person.match import Candidate
 from missing_person.sources.mshp import MissingListing
 from missing_person.sources.news import Article
@@ -71,10 +71,20 @@ def render_note(case: Case, ncic: list[MissingListing], namus_resolved: bool | N
     out += ["", "#### Last-seen locations, by source"]
     for loc in case.locations:
         out.append(f"- **{loc.label}** ({loc.source}) `{loc.lat:.4f}, {loc.lon:.4f}`"
+                   f" (+/- {loc.precision_mi} mi)"
                    + (f" -- {loc.note}" if loc.note else ""))
-    gaps = separation(case.locations)
-    for a, b, miles in gaps:
-        out.append(f"- Separation: {a} to {b} is **{miles} mi**")
+    for a, b, miles, meaningful in separation(case.locations):
+        if meaningful:
+            out.append(f"- Separation: {a} to {b} is **{miles} mi**, which exceeds "
+                       "the combined positional uncertainty. A real disagreement.")
+        else:
+            out.append(f"- Separation: {a} to {b} measures {miles} mi, which is "
+                       "**inside the combined positional uncertainty**. This "
+                       "measurement cannot tell you whether they disagree.")
+    for a_label, a_zip, b_label, b_zip in zip_conflicts(case.locations):
+        out.append(f"- **ZIP conflict**: {a_label} is in {a_zip}, {b_label} is in "
+                   f"{b_zip}. Different ZIPs for the same reported moment is a "
+                   "real disagreement, at a resolution the coordinates lack.")
 
     out += ["", "#### Unidentified-person candidates",
             "These are RANKED LEADS, not identifications. Only the medical examiner "

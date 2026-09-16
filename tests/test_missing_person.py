@@ -26,6 +26,7 @@ sys.path.insert(0, str(REPO))
 os.environ["MP_CASES_DIR"] = str(REPO / "cases")
 
 from missing_person import case as case_mod
+from missing_person.geo import separation, zip_conflicts
 from missing_person.match import rank, score
 from missing_person.net import SourceError
 from missing_person.sources import mshp, news
@@ -192,3 +193,46 @@ def test_case_keeps_competing_location_claims(example: case_mod.Case) -> None:
 def test_recovery_floor_is_not_later_than_the_last_seen_date(
         example: case_mod.Case) -> None:
     assert example.recovery_floor <= example.last_seen_date
+
+
+# --- positional precision ---------------------------------------------------
+
+def _loc(label: str, lat: float, lon: float, precision: float,
+         zcta: str = "") -> case_mod.Location:
+    return case_mod.Location(label=label, source="test", lat=lat, lon=lon,
+                             precision_mi=precision, zcta=zcta)
+
+
+def test_gap_inside_combined_uncertainty_is_not_called_meaningful() -> None:
+    """The bug this encodes: a coarsened centroid was differenced against a
+    street intersection and the 2.61 mi result was reported as a finding. The
+    combined uncertainty was 2.75 mi, so the measurement said nothing."""
+    coarse = _loc("ZIP centroid", 39.2183, -94.6347, 2.5)
+    precise = _loc("intersection", 39.2542, -94.6498, 0.25)
+    (_, _, miles, meaningful), = separation([coarse, precise])
+    assert 2.5 < miles < 2.8
+    assert not meaningful
+
+
+def test_gap_exceeding_uncertainty_is_meaningful() -> None:
+    a = _loc("a", 39.10, -94.60, 0.25)
+    b = _loc("b", 39.30, -94.60, 0.25)
+    (_, _, _, meaningful), = separation([a, b])
+    assert meaningful
+
+
+def test_differing_zips_are_flagged_even_when_distance_cannot_resolve() -> None:
+    """The whole point of carrying ZIP separately: the distance test abstains,
+    the ZIP test still answers."""
+    coarse = _loc("ZIP centroid", 39.2183, -94.6347, 2.5, "64151")
+    precise = _loc("intersection", 39.2542, -94.6498, 0.25, "64154")
+    (_, _, _, meaningful), = separation([coarse, precise])
+    assert not meaningful
+    assert zip_conflicts([coarse, precise]) == [
+        ("ZIP centroid", "64151", "intersection", "64154")]
+
+
+def test_missing_zip_is_not_a_conflict() -> None:
+    """An unknown ZIP must not read as a disagreement."""
+    assert zip_conflicts([_loc("a", 39.1, -94.6, 0.25, ""),
+                          _loc("b", 39.2, -94.6, 0.25, "64154")]) == []

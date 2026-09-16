@@ -76,11 +76,22 @@ class Description:
 
 @dataclass(frozen=True)
 class Location:
-    """One claimed last-seen location, with its provenance.
+    """One claimed last-seen location, with its provenance AND its precision.
 
     Cases routinely carry more than one. Keeping them side by side with the
     source that asserted each is how the discrepancy stays visible instead of
     being resolved by whichever file was written last.
+
+    `precision_mi` is not decoration. Public databases publish DELIBERATELY
+    COARSENED coordinates: NamUs's `publicGeolocation` is a centroid, measured
+    on a control case at 748 ft from the town centre for a city-level address.
+    Subtracting such a point from a street intersection yields a number that
+    looks like a finding and is an artifact. Record how precise each claim
+    actually is, and let `geo.separation` refuse to call the difference
+    meaningful when it falls inside the combined uncertainty.
+
+    Rules of thumb: street address ~0.05, named intersection ~0.25,
+    neighbourhood ~1.0, ZIP or city centroid ~2.5.
     """
 
     label: str
@@ -88,6 +99,13 @@ class Location:
     lat: float
     lon: float
     note: str = ""
+    precision_mi: float = 0.25
+    # Census ZCTA for this point. Worth carrying separately from the
+    # coordinate: a coarsened centroid cannot be compared against a street
+    # intersection, but the ZIP a source ACTUALLY RECORDED can be compared
+    # against the ZIP a location actually falls in, and that comparison has
+    # resolution the distance calculation does not.
+    zcta: str = ""
 
 
 @dataclass(frozen=True)
@@ -146,6 +164,8 @@ def load(case_id: str) -> Case:
             lat=float(loc["lat"]),
             lon=float(loc["lon"]),
             note=loc.get("note", ""),
+            precision_mi=float(loc.get("precision_mi", 0.25)),
+            zcta=str(loc.get("zcta", "")),
         )
         for loc in raw["locations"]
     ]

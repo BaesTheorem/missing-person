@@ -117,18 +117,42 @@ def timeout_for(radius_mi: float) -> int:
     return min(180, int(40 + radius_mi * 25))
 
 
-def separation(locations: list[Location]) -> list[tuple[str, str, float]]:
-    """Pairwise distance between competing last-seen claims.
+def separation(locations: list[Location]) -> list[tuple[str, str, float, bool]]:
+    """Pairwise distance between competing last-seen claims, with a verdict.
 
-    When sources disagree about where someone was last seen, the size of the
-    disagreement decides whether it can be ignored. Two points 400 feet apart
-    are the same place described twice; five miles apart are two hypotheses.
+    The fourth element says whether the gap SURVIVES the combined positional
+    uncertainty of the two claims. It exists because the naive version of this
+    function reported a 5.4-mile disagreement between a family flyer and a
+    NamUs record, and the NamUs coordinate turned out to be a coarsened
+    centroid whose true uncertainty swallowed the entire gap. The distance was
+    real arithmetic on numbers that could not be subtracted from each other.
+
+    A False verdict does not mean the claims agree. It means this measurement
+    cannot tell you, and something with actual resolution has to.
     """
-    out: list[tuple[str, str, float]] = []
+    out: list[tuple[str, str, float, bool]] = []
     for i, a in enumerate(locations):
         for b in locations[i + 1:]:
-            out.append((a.label, b.label,
-                        round(haversine_mi(a.lat, a.lon, b.lat, b.lon), 2)))
+            gap = haversine_mi(a.lat, a.lon, b.lat, b.lon)
+            meaningful = gap > (a.precision_mi + b.precision_mi)
+            out.append((a.label, b.label, round(gap, 2), meaningful))
+    return out
+
+
+def zip_conflicts(locations: list[Location]) -> list[tuple[str, str, str, str]]:
+    """Claims whose recorded ZIP differs.
+
+    This exists because the distance test can come back "inside the combined
+    uncertainty" while the sources still demonstrably disagree. A coarsened
+    centroid two miles from an intersection proves nothing; two different ZIP
+    codes on the same reported moment is a real conflict at a resolution the
+    coordinates never had.
+    """
+    out: list[tuple[str, str, str, str]] = []
+    for i, a in enumerate(locations):
+        for b in locations[i + 1:]:
+            if a.zcta and b.zcta and a.zcta != b.zcta:
+                out.append((a.label, a.zcta, b.label, b.zcta))
     return out
 
 

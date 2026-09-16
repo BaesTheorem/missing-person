@@ -75,9 +75,13 @@ def cmd_status(args: argparse.Namespace) -> int:
         print(f"    {label:<38} {value}")
     print("\n  Last-seen claims:")
     for loc in c.locations:
-        print(f"    {loc.label:<28} {loc.lat:.4f}, {loc.lon:.4f}  ({loc.source})")
-    for a, b, miles in geo.separation(c.locations):
-        print(f"    separation: {a} <-> {b} = {miles} mi")
+        print(f"    {loc.label:<28} {loc.lat:.4f}, {loc.lon:.4f} "
+              f"+/-{loc.precision_mi}mi  ({loc.source})")
+    for a, b, miles, meaningful in geo.separation(c.locations):
+        verdict = "real gap" if meaningful else "INSIDE the combined uncertainty"
+        print(f"    separation: {a} <-> {b} = {miles} mi ({verdict})")
+    for a_label, a_zip, b_label, b_zip in geo.zip_conflicts(c.locations):
+        print(f"    ZIP CONFLICT: {a_label} = {a_zip}, {b_label} = {b_zip}")
     return 0
 
 

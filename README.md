@@ -85,11 +85,32 @@ different claims, and only one of them helps.
 ## Design decisions that are load-bearing
 
 **Competing claims are kept, not reconciled.** Sources routinely disagree
-about where and when someone was last seen. In the case this was built for,
-the family flyer and the agency-fed record were **5.4 miles apart**. Both go
-in the case file with their provenance; `mp status` prints the distance
-between them. Picking a favourite would hide a five-mile search-area question
-behind a tidy config.
+about where and when someone was last seen. Both claims go in the case file
+with their provenance, and `mp status` compares them. Picking a favourite
+would hide a real search-area question behind a tidy config.
+
+**Every location carries a precision, and the distance test can abstain.**
+This is the correction that taught the rest. Public databases publish
+deliberately coarsened coordinates: NamUs's `publicGeolocation` is a centroid,
+measured on a control case at **748 ft from the town centre** for a
+city-level address. Differencing such a point against a street intersection
+produced a confident "5.4 miles apart" that was an artifact of two stacked
+approximations, not a measurement. `separation()` now reports whether a gap
+survives the combined positional uncertainty, and says plainly when it cannot
+tell. A `False` verdict does not mean the claims agree; it means this
+instrument cannot answer and something with real resolution has to.
+
+**ZIP is carried separately from the coordinate, because it can answer when
+the coordinate cannot.** In the case above the distance test correctly
+abstained (2.61 mi gap against 2.75 mi of combined uncertainty) while the
+Census ZCTAs still differed, 64151 against 64154, for what both sources
+describe as the same moment. Agency-entered ZIP beats derived latitude.
+
+**Compute intersections, do not eyeball them.** Grade-separated roads share no
+map node, so "find the shared node" returns nothing and an eyeballed centroid
+can be miles off. `mp` finds the closest approach between the two ways; for
+the case above that was 66 ft, and the computed point sat 2.7 miles from the
+guess.
 
 **Descriptions are ranges.** Three sources gave three different heights for
 the same person. Filtering on any one number discards the candidate the others

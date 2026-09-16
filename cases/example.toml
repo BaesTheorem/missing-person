@@ -62,6 +62,16 @@ label = "Home address"
 source = "agency record"
 lat = 39.0997
 lon = -94.5786
+# How precise this claim actually is, in miles. NOT decoration: public
+# databases publish coarsened coordinates (NamUs's publicGeolocation is a
+# centroid), and differencing one against a street intersection produces a
+# number that looks like a finding and is an artifact.
+# Street address ~0.05, named intersection ~0.25, neighbourhood ~1.0,
+# ZIP or city centroid ~2.5.
+precision_mi = 2.5
+# Census ZCTA. Carried separately because when two coarse coordinates cannot
+# be told apart, the ZIPs each source recorded still can be.
+zcta = "64111"
 note = "Camera caught them leaving on foot."
 
 [[locations]]
@@ -69,7 +79,9 @@ label = "Reported sighting, north side"
 source = "family flyer"
 lat = 39.1500
 lon = -94.6000
-note = "Approximate; the flyer names an intersection, not a coordinate."
+precision_mi = 0.25
+zcta = "64118"
+note = "Compute an intersection rather than eyeballing it; grade-separated roads share no map node."
 
 [links]
 "NamUs" = "https://www.namus.gov/MissingPersons"
