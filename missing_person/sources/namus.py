@@ -68,6 +68,25 @@ class UnidentifiedRecord:
         return UP_CASE_URL.format(self.number)
 
 
+# Every US state and territory NamUs files records under. Needed because a
+# nationwide query cannot be run as one request: the API refuses any result
+# set over 10,000 and the unidentified case set holds ~15,500, so "national"
+# has to mean "each state in turn". Discovered only when a national sweep
+# failed with HTTP 400 after the seven-state version had worked all day.
+STATES = [
+    "Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado",
+    "Connecticut", "Delaware", "District of Columbia", "Florida", "Georgia",
+    "Hawaii", "Idaho", "Illinois", "Indiana", "Iowa", "Kansas", "Kentucky",
+    "Louisiana", "Maine", "Maryland", "Massachusetts", "Michigan", "Minnesota",
+    "Mississippi", "Missouri", "Montana", "Nebraska", "Nevada", "New Hampshire",
+    "New Jersey", "New Mexico", "New York", "North Carolina", "North Dakota",
+    "Ohio", "Oklahoma", "Oregon", "Pennsylvania", "Puerto Rico", "Rhode Island",
+    "South Carolina", "South Dakota", "Tennessee", "Texas", "Utah", "Vermont",
+    "Virginia", "Washington", "West Virginia", "Wisconsin", "Wyoming",
+]
+RESULT_CAP = 10000
+
+
 def _search(case_set: str, fields: list[str], predicates: list[dict[str, Any]],
             take: int = 2000) -> list[dict[str, Any]]:
     """Page through a case set. `take` over ~2000 starts timing out."""
@@ -83,7 +102,13 @@ def _search(case_set: str, fields: list[str], predicates: list[dict[str, Any]],
         out.extend(rows)
         total = int(page.get("count", 0))
         skip += len(rows)
-        if not rows or skip >= total:
+        if total > RESULT_CAP and not predicates:
+            raise SourceError(
+                f"{case_set} holds {total} records and the API caps a result "
+                f"set at {RESULT_CAP}. Query state by state instead; "
+                "`unidentified(states=None)` already does."
+            )
+        if not rows or skip >= total or skip >= RESULT_CAP:
             return out
 
 
@@ -183,9 +208,17 @@ def unidentified(states: list[str] | None = None,
     `found_on_or_after` filters client-side because the API rejects every
     date-range operator. Records with no dateFound are KEPT, not dropped: an
     unknown recovery date is not evidence the recovery predates the search.
+
+    `states=None` means nationwide, which is run as one query PER STATE rather
+    than one big query, because the API refuses any result set over 10,000 and
+    the case set is larger than that. A single national request returns
+    HTTP 400, not a truncated list, so this is a hard requirement.
     """
-    preds = [{"field": "stateOfRecovery", "operator": "IsIn", "values": states}] if states else []
-    rows = _search("UnidentifiedPersons", UP_FIELDS, preds)
+    targets = states or STATES
+    rows: list[dict[str, Any]] = []
+    for chunk in [targets[i:i + 8] for i in range(0, len(targets), 8)]:
+        preds = [{"field": "stateOfRecovery", "operator": "IsIn", "values": chunk}]
+        rows.extend(_search("UnidentifiedPersons", UP_FIELDS, preds))
     out: list[UnidentifiedRecord] = []
     for r in rows:
         found = _dt(r.get("dateFound"))

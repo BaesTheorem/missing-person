@@ -8,17 +8,13 @@ terrain around the last-seen point.
 Built while helping with a real search. The case is a config file, so it
 generalises to any case in the United States.
 
-## Scope, deliberately narrow
+## What it will not tell you
 
-Every source is public and read-only: government databases published for
-exactly this purpose (NCIC via state feeds, NamUs), newsrooms' own RSS, and
-OpenStreetMap. Nothing touches private accounts, phone data, or the people
-around a missing person.
-
-The toolkit cannot file, edit, or close a case, and **it does not identify
-anyone**. Unidentified-person output is a list of ranked leads for the
-investigating agency to evaluate. Identification is DNA, dental, prints, or a
-medical examiner.
+It does not identify anyone. Unidentified-person output is a ranked list of
+leads for an investigating agency to evaluate; identification is DNA, dental,
+prints, or a medical examiner. And it never reports a case resolved from a
+single source, because `caseIsResolved` and absence from an NCIC feed both
+flip for administrative reasons.
 
 ## Install
 
