@@ -73,7 +73,20 @@ def _overlap(a: tuple[int, int], b: tuple[int, int], tolerance: int) -> float | 
 
 
 def _hard_conflict(case: Case, rec: UnidentifiedRecord) -> str | None:
-    """Reasons to exclude outright, as opposed to score low."""
+    """Reasons to exclude outright, as opposed to score low.
+
+    The recovery floor must be the LAST CONFIRMED-ALIVE moment, not the
+    earliest date any source mentions. An early floor "to be inclusive" let a
+    skull found 4/26 through for a man who was on camera 4/30. Inclusive
+    toward the past is not inclusive; it is wrong.
+
+    Not handled here, and worth knowing: a record's dateFound is sometimes a
+    lab-intake date rather than a recovery date (four Missouri records carried
+    "Date Body Found is the date of arrival at the SEMO Human Osteology Lab").
+    Skeletal remains at a lab days after the floor cannot be the person. Read
+    circumstancesOfRecovery before treating a local, recent, all-unknown record
+    as a lead.
+    """
     want_sex = case.description.sex.strip().lower()
     got_sex = rec.sex.strip().lower()
     if _known(got_sex) and got_sex != want_sex:

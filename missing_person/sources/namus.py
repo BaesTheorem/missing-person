@@ -229,6 +229,13 @@ def unidentified(states: list[str] | None = None,
     for chunk in [targets[i:i + 8] for i in range(0, len(targets), 8)]:
         preds = [{"field": "stateOfRecovery", "operator": "IsIn", "values": chunk}]
         rows.extend(_search("UnidentifiedPersons", UP_FIELDS, preds))
+    # Paging with skip/take against an unstable sort returns some records
+    # twice. Six duplicates in one 83-record national sweep. Dedup on the case
+    # number so counts downstream can be trusted.
+    by_number: dict[int, dict[str, Any]] = {}
+    for r in rows:
+        by_number.setdefault(int(r.get("namus2Number") or 0), r)
+    rows = list(by_number.values())
     out: list[UnidentifiedRecord] = []
     for r in rows:
         found = _dt(r.get("dateFound"))
