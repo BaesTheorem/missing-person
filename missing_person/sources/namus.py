@@ -17,6 +17,7 @@ live one is www.namus.gov/api/. Two things about it shape this module.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
@@ -112,6 +113,14 @@ def _search(case_set: str, fields: list[str], predicates: list[dict[str, Any]],
             return out
 
 
+# The 400 body arrives as JSON inside an error string, so the field names are
+# wrapped in BACKSLASH-escaped quotes: Invalid field name \"dateOfDeath\".
+# Splitting naively on a double quote captures the trailing backslash too and
+# every name silently fails to match, which makes discovery report that every
+# candidate was valid. Match the name itself instead.
+INVALID_FIELD = re.compile(r'Invalid field name \\?"([A-Za-z0-9_.]+)')
+
+
 def discover_fields(case_set: str, candidates: list[str]) -> list[str]:
     """Ask the API which of `candidates` it accepts, using its own 400 body.
 
@@ -125,8 +134,9 @@ def discover_fields(case_set: str, candidates: list[str]) -> list[str]:
                   {"take": 1, "skip": 0, "projections": candidates, "predicates": []})
         return list(candidates)
     except SourceError as exc:
-        bad = {part.split('"')[1] for part in str(exc).split("Invalid field name ")[1:]
-               if '"' in part}
+        bad = set(INVALID_FIELD.findall(str(exc)))
+        if not bad:
+            raise
         return [c for c in candidates if c not in bad]
 
 
