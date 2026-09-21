@@ -111,6 +111,103 @@ def test_news_rejects_local_story_about_someone_else() -> None:
         TERMS, SURNAME, LOCALITY)
 
 
+# --- news candidates (headline omits the name) -------------------------------
+#
+# Google News supplies a <description> that is only the headline repeated plus
+# the publication, so the matcher never sees article body text. Local headlines
+# about a missing person routinely omit the name. Requiring the name on that
+# input silently discarded every story the watcher existed to catch, and the
+# old positive control missed it by putting the name in a summary the real feed
+# never provides. These tests pin the shape the feed ACTUALLY delivers.
+
+FACTS = news.CaseFacts(
+    agency_terms=["Example County deputies", "Example County Sheriff"],
+    age=30,
+    last_seen=date(2026, 1, 15),
+)
+CAND_LOCALITY = ["Example County", "Kansas City"]
+
+
+def _stub(title: str) -> news.Article:
+    """An article as Google News actually delivers it: headline, no body."""
+    return news.Article("News", title, "https://example.invalid/y", "",
+                        f" {title} &nbsp;&nbsp; Example Star ")
+
+
+def _cand(title: str) -> news.NewsCandidate:
+    a = _stub(title)
+    return news.NewsCandidate(a, news.corroborations(a, FACTS),
+                              news.contradictions(a, FACTS))
+
+
+def test_nameless_local_story_is_not_a_match() -> None:
+    """Why the candidate track exists: the name is genuinely absent."""
+    assert not news._matches(
+        _stub("Example County deputies searching for missing 30-year-old man"),
+        TERMS, SURNAME, CAND_LOCALITY)
+
+
+def test_nameless_story_agreeing_on_agency_and_age_is_strong() -> None:
+    """The regression control. This exact shape was dropped in production."""
+    c = _cand("Example County deputies searching for missing 30-year-old man")
+    assert c.strong
+    assert set(c.corroborates) == {"agency", "age"}
+
+
+def test_nameless_story_agreeing_on_agency_and_date_is_strong() -> None:
+    c = _cand("Example County deputies searching for man last seen on January 15")
+    assert c.strong
+    assert "date" in c.corroborates
+
+
+def test_last_seen_date_matches_across_a_one_day_disagreement() -> None:
+    """Sources routinely name adjacent days for the same disappearance."""
+    assert "date" in _cand(
+        "Example County deputies seek man last seen January 14").corroborates
+
+
+def test_wrong_age_demotes_a_story_that_agrees_on_everything_else() -> None:
+    """Right agency, right place, different person. Age is what separates them."""
+    c = _cand("Example County deputies working to locate missing 47-year-old man")
+    assert "agency" in c.corroborates
+    assert c.contradicts
+    assert not c.strong
+
+
+def test_one_agreement_alone_is_not_strong() -> None:
+    c = _cand("Example County deputies investigate missing person report")
+    assert not c.strong
+
+
+def test_generic_local_crime_corroborates_nothing() -> None:
+    """Locality and context alone must not look like agreement."""
+    assert _cand("Man found dead Friday in Kansas City").corroborates == []
+
+
+def test_weekday_counts_only_next_to_a_last_seen_phrase() -> None:
+    weekday = f"{FACTS.last_seen:%A}"
+    near = _cand(f"Example County deputies say man was last seen {weekday}")
+    far = _cand(f"Example County {weekday} forecast: deputies warn of missing signs")
+    assert "weekday" in near.corroborates
+    assert "weekday" not in far.corroborates
+
+
+@pytest.mark.parametrize("title", [
+    "Example Person - Transfermarkt",
+    "Colts sign LB Example Person to reserve/future contract",
+])
+def test_same_name_sports_noise_is_not_even_a_candidate(title: str) -> None:
+    """The name-bearing false positives must not reappear through this door."""
+    assert not news._is_candidate(_stub(title), CAND_LOCALITY)
+
+
+def test_candidate_never_reports_itself_as_a_mention(example: case_mod.Case) -> None:
+    """A candidate is a prompt to read, never evidence. Buckets stay separate."""
+    c = _cand("Example County deputies searching for missing 30-year-old man")
+    assert isinstance(c, news.NewsCandidate)
+    assert not isinstance(c, news.Article)
+
+
 # --- MSHP parsing -----------------------------------------------------------
 
 def test_date_cell_with_hidden_sort_key_parses() -> None:
@@ -315,7 +412,7 @@ def test_scan_survives_mshp_outage(example: case_mod.Case, monkeypatch) -> None:
         raise SourceError("MSHP returned no results table")
     monkeypatch.setattr(scan_mod.mshp, "search_missing", boom)
     monkeypatch.setattr(scan_mod.namus, "unidentified", lambda *a, **k: [])
-    monkeypatch.setattr(scan_mod.news, "scan", lambda *a, **k: [])
+    monkeypatch.setattr(scan_mod.news, "scan", lambda *a, **k: ([], []))
     r = scan_mod.run(example)
     assert "mshp" in r.failures
     assert r.ncic_active(example) is None, "a feed that did not answer is not 'inactive'"
@@ -328,6 +425,6 @@ def test_scan_reports_active_when_feed_answers(example: case_mod.Case, monkeypat
                          kind="ADULT", poster_url=None, photo_url=None)
     monkeypatch.setattr(scan_mod.mshp, "search_missing", lambda *a, **k: [hit])
     monkeypatch.setattr(scan_mod.namus, "unidentified", lambda *a, **k: [])
-    monkeypatch.setattr(scan_mod.news, "scan", lambda *a, **k: [])
+    monkeypatch.setattr(scan_mod.news, "scan", lambda *a, **k: ([], []))
     r = scan_mod.run(example)
     assert r.ncic_active(example) is True

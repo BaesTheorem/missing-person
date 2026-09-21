@@ -15,7 +15,7 @@ from missing_person.case import Case
 from missing_person.geo import separation, zip_conflicts
 from missing_person.match import Candidate
 from missing_person.sources.mshp import MissingListing
-from missing_person.sources.news import Article
+from missing_person.sources.news import Article, NewsCandidate
 
 VAULT = Path.home() / "Exobrain"
 NOTE_DIR = VAULT / "Areas" / "Community" / "Missing Persons"
@@ -44,7 +44,8 @@ def status_block(case: Case, ncic: list[MissingListing],
 
 def render_note(case: Case, ncic: list[MissingListing], namus_resolved: bool | None,
                 namus_modified: str, candidates: list[Candidate],
-                articles: list[Article], scanned: datetime) -> str:
+                articles: list[Article], scanned: datetime,
+                news_candidates: list[NewsCandidate] | None = None) -> str:
     d = case.description
     out: list[str] = [
         f"# {case.display_name}",
@@ -113,7 +114,27 @@ def render_note(case: Case, ncic: list[MissingListing], namus_resolved: bool | N
         for a in articles[:15]:
             out.append(f"- [{a.title}]({a.url}) -- {a.source}, {a.published}")
     else:
-        out.append("- Nothing new in the watched feeds.")
+        out.append("- No story in the watched feeds printed the name. That is not "
+                   "the same as no coverage: most local headlines about a missing "
+                   "person never print it. See the candidates below.")
+
+    out += ["", "#### Possible coverage, name not printed",
+            "Local missing-person stories whose headline omits the name, listed "
+            "with the case facts they agree with. UNVERIFIED. Read the story "
+            "before treating any of these as being about this case."]
+    if news_candidates:
+        out.append("")
+        out.append("| | Story | Agrees with | Conflicts |")
+        out.append("|---|---|---|---|")
+        for c in news_candidates[:15]:
+            a = c.article
+            mark = "**strong**" if c.strong else "weak"
+            out.append(f"| {mark} | [{a.title}]({a.url}) -- {a.source} | "
+                       f"{', '.join(c.corroborates) or '-'} | "
+                       f"{', '.join(c.contradicts) or '-'} |")
+    else:
+        out.append("- None. No unnamed local missing-person story matched any "
+                   "case fact.")
 
     out += ["", "#### Links"]
     for label, url in case.links.items():
@@ -131,7 +152,8 @@ def write_note(case: Case, body: str) -> Path:
 
 
 def terminal(case: Case, ncic: list[MissingListing], namus_resolved: bool | None,
-             candidates: list[Candidate], articles: list[Article]) -> str:
+             candidates: list[Candidate], articles: list[Article],
+             news_candidates: list[NewsCandidate] | None = None) -> str:
     lines = [f"== {case.display_name} ==",
              f"   {case.agency} | tips {case.agency_phones.get('missing_persons', '')}"]
     active = any(case.mshp_last.lower() in m.name.lower() for m in ncic)
@@ -145,6 +167,11 @@ def terminal(case: Case, ncic: list[MissingListing], namus_resolved: bool | None
     lines.append(f"   news mentions       : {len(articles)}")
     for a in articles[:5]:
         lines.append(f"     {a.source}: {a.title[:70]}")
+    strong = [c for c in (news_candidates or []) if c.strong]
+    lines.append(f"   possible coverage   : {len(strong)} strong"
+                 f" / {len(news_candidates or [])} total (name not printed)")
+    for c in strong[:5]:
+        lines.append(f"     [{', '.join(c.corroborates)}] {c.article.title[:60]}")
     return "\n".join(lines)
 
 

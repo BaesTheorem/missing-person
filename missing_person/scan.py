@@ -18,7 +18,7 @@ from missing_person.match import Candidate, rank
 from missing_person.net import SourceError
 from missing_person.sources import mshp, namus, news
 from missing_person.sources.mshp import MissingListing
-from missing_person.sources.news import Article
+from missing_person.sources.news import Article, NewsCandidate
 
 
 @dataclass
@@ -28,6 +28,9 @@ class ScanResult:
     namus_modified: str = ""
     candidates: list[Candidate] = field(default_factory=list)
     articles: list[Article] = field(default_factory=list)
+    # Local missing-person stories that never printed the name. Leads to read,
+    # never inputs to a conclusion; see news.NewsCandidate.
+    news_candidates: list[NewsCandidate] = field(default_factory=list)
     # source name -> error text, for every source that did not answer
     failures: dict[str, str] = field(default_factory=dict)
 
@@ -65,7 +68,15 @@ def run(case: Case, min_score: float = 0.55,
     except SourceError as exc:
         r.failures["namus_unidentified"] = str(exc)
     try:
-        r.articles = news.scan(case.news_terms, case.mshp_last, case.locality_terms)
+        r.articles, r.news_candidates = news.scan(
+            case.news_terms, case.mshp_last, case.locality_terms,
+            news.CaseFacts(agency_terms=case.agency_terms,
+                           age=case.description.age_at_disappearance,
+                           last_seen=case.last_seen_date))
     except SourceError as exc:
         r.failures["news"] = str(exc)
     return r
+
+
+def strong_candidates(result: ScanResult) -> list[NewsCandidate]:
+    return [c for c in result.news_candidates if c.strong]

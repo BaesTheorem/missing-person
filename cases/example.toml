@@ -29,6 +29,13 @@ news_terms = ["Example Person"]
 # Place names that keep a common personal name attached to THIS case. Without
 # them a news sweep returns every athlete and obituary sharing the name.
 locality_terms = ["Example County", "Kansas City", "Missouri"]
+# How local newsrooms name the investigating agency. Most headlines about a
+# missing person never print the name ("County deputies searching for missing
+# 30-year-old man"), and a Google News feed summary is only the headline
+# again, so these
+# terms plus the age and last-seen date are what identify such a story at all.
+# Defaults to the full `agency` string, which newsrooms rarely write out.
+agency_terms = ["Example County Sheriff", "Example County deputies"]
 
 [description]
 sex = "Male"

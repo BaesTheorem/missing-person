@@ -21,8 +21,8 @@ from __future__ import annotations
 import re
 import urllib.parse
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
 
 from missing_person.net import SourceError, fetch
 
@@ -79,6 +79,101 @@ def locality_pattern(terms: list[str]) -> re.Pattern[str]:
     return re.compile("|".join(re.escape(t) for t in terms), re.I)
 
 
+@dataclass(frozen=True)
+class CaseFacts:
+    """The case facts that can identify a story whose headline omits the name.
+
+    A local newsroom writes "Deputies searching for missing 30-year-old man" far
+    more often than it writes the name, and a Google News <description> is a
+    stub (the headline again plus the publication), so the body text that
+    WOULD carry the name never reaches the matcher. Requiring the name on that
+    input discards exactly the coverage the watcher exists to catch.
+
+    These fields are what remains to identify a story by. They are case data,
+    not code, for the same reason locality terms are.
+    """
+
+    agency_terms: list[str] = field(default_factory=list)
+    age: int | None = None
+    last_seen: date | None = None
+
+
+AGE_MENTION = re.compile(r"\b(\d{1,3})[\s-]?year[\s-]?old\b", re.I)
+
+
+def _date_forms(day: date) -> list[str]:
+    """Every way a newsroom writes this date, across a one-day window.
+
+    The window is not slack, it is the disagreement these cases actually
+    carry: the NCIC entry and the first news story routinely name different
+    days for the same disappearance.
+    """
+    out: list[str] = []
+    for delta in (-1, 0, 1):
+        d = day + timedelta(days=delta)
+        out += [f"{d:%B} {d.day}", f"{d:%b} {d.day}",
+                f"{d.month}/{d.day}", f"{d:%m/%d}"]
+    return out
+
+
+def corroborations(article: Article, facts: CaseFacts) -> list[str]:
+    """Which case-specific facts this story independently agrees with.
+
+    Only facts a story could get wrong count. Locality does not appear here:
+    it is already required of every candidate, so counting it again would let
+    a generic local crime item look corroborated.
+    """
+    blob = f"{article.title} {article.summary}"
+    low = blob.lower()
+    hits: list[str] = []
+    if any(t.lower() in low for t in facts.agency_terms):
+        hits.append("agency")
+    if facts.age is not None and any(
+            int(m) == facts.age for m in AGE_MENTION.findall(blob)):
+        hits.append("age")
+    if facts.last_seen is not None:
+        if any(f.lower() in low for f in _date_forms(facts.last_seen)):
+            hits.append("date")
+        elif re.search(
+                r"(last seen|missing since|last contact|disappear|vanish)"
+                r"[^.]{0,40}?\b" + f"{facts.last_seen:%A}" + r"\b", blob, re.I):
+            hits.append("weekday")
+    return hits
+
+
+def contradictions(article: Article, facts: CaseFacts) -> list[str]:
+    """Facts this story states that rule it OUT, so noise cannot accumulate.
+
+    A story about a different missing person in the same city matches locality
+    and context and names an agency. The age it prints is the cheapest thing
+    that separates it, and treating a stated mismatch as disqualifying is what
+    keeps "missing 47-year-old man" from riding agency agreement into a
+    notification.
+    """
+    blob = f"{article.title} {article.summary}"
+    ages = {int(m) for m in AGE_MENTION.findall(blob)}
+    if facts.age is not None and ages and facts.age not in ages:
+        return [f"age {'/'.join(str(a) for a in sorted(ages))} != {facts.age}"]
+    return []
+
+
+@dataclass(frozen=True)
+class NewsCandidate:
+    """A local missing-person story that never printed the name.
+
+    Never a match and never state. It is a prompt to go read something, which
+    is why `strong` gates notification and nothing here feeds a conclusion.
+    """
+
+    article: Article
+    corroborates: list[str]
+    contradicts: list[str]
+
+    @property
+    def strong(self) -> bool:
+        return len(self.corroborates) >= 2 and not self.contradicts
+
+
 def _matches(article: Article, terms: list[str], surname: str,
              locality: list[str] | None = None) -> bool:
     """A hit needs the name, case context, AND local anchoring.
@@ -96,10 +191,19 @@ def _matches(article: Article, terms: list[str], surname: str,
     return bool(locality_pattern(locality or []).search(blob))
 
 
-def scan(terms: list[str], surname: str,
-         locality: list[str] | None = None) -> list[Article]:
-    """Sweep every feed. A dead feed is reported, never treated as 'no news'."""
+def scan(terms: list[str], surname: str, locality: list[str] | None = None,
+         facts: CaseFacts | None = None) -> tuple[list[Article], list[NewsCandidate]]:
+    """Sweep every feed, returning confirmed mentions and name-less candidates.
+
+    Two buckets, because the feeds supply two different kinds of evidence and
+    collapsing them loses one of them. A story that prints the name is a
+    mention. A local missing-person story that does not print the name is a
+    candidate: worth a human read, never worth a conclusion.
+
+    A dead feed is reported, never treated as 'no news'.
+    """
     hits: list[Article] = []
+    maybes: list[NewsCandidate] = []
     problems: list[str] = []
     feeds = dict(FEEDS)
     anchor = " OR ".join(f'"{t}"' for t in (locality or [])[:3])
@@ -111,15 +215,37 @@ def scan(terms: list[str], surname: str,
             for article in _items(fetch(url, timeout=40, retries=2), source):
                 if _matches(article, terms, surname, locality):
                     hits.append(article)
+                elif facts and _is_candidate(article, locality):
+                    maybes.append(NewsCandidate(
+                        article, corroborations(article, facts),
+                        contradictions(article, facts)))
         except SourceError as exc:
             problems.append(f"{source}: {exc}")
-    if problems and not hits:
+    if problems and not hits and not maybes:
         # An empty result from a broken instrument is not evidence of silence.
         raise SourceError("no feed answered: " + "; ".join(problems))
     seen: set[str] = set()
     unique = [a for a in hits if not (a.key in seen or seen.add(a.key))]
     unique.sort(key=_sort_key, reverse=True)
-    return unique
+    kept: set[str] = set()
+    cands = [c for c in maybes
+             if c.corroborates and not (c.article.key in kept or kept.add(c.article.key))]
+    cands.sort(key=lambda c: (c.strong, len(c.corroborates),
+                              _sort_key(c.article)), reverse=True)
+    return unique, cands
+
+
+def _is_candidate(article: Article, locality: list[str] | None) -> bool:
+    """Local, and about a missing person, but the name never appears.
+
+    Deliberately the same context and locality gates `_matches` applies. Only
+    the name leg is dropped, and what replaces it is corroboration scoring,
+    not nothing.
+    """
+    blob = f"{article.title} {article.summary}"
+    if not CONTEXT.search(blob):
+        return False
+    return bool(locality_pattern(locality or []).search(blob))
 
 
 def _sort_key(article: Article) -> datetime:

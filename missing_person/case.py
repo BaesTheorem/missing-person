@@ -149,6 +149,11 @@ class Case:
     search_states: list[str]
     news_terms: list[str]
     locality_terms: list[str]
+    # How local newsrooms name the investigating agency (an acronym, or
+    # "<city> police"). Used to identify a story whose headline omits the
+    # person's
+    # name, which is most of them. Case data, like locality_terms.
+    agency_terms: list[str] = field(default_factory=list)
     documents: list[Document] = field(default_factory=list)
     cases_dir: Path = REPO_CASES
     links: dict[str, str] = field(default_factory=dict)
@@ -222,6 +227,7 @@ def load(case_id: str) -> Case:
         search_states=list(c.get("search_states", [])),
         news_terms=list(c.get("news_terms", [])),
         locality_terms=list(c.get("locality_terms", [])),
+        agency_terms=list(c.get("agency_terms", [])) or [c["agency"]],
         documents=[
             Document(label=d["label"], url=d["url"], kind=d.get("kind", "pdf"),
                      note=d.get("note", ""))

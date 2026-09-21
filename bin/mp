@@ -255,9 +255,11 @@ def cmd_scan(args: argparse.Namespace) -> int:
     for warning in warnings:
         print(f"   !! {warning}", file=sys.stderr)
     _report_failures(r)
-    print(report.terminal(c, r.listings, r.namus_resolved, r.candidates, r.articles))
+    print(report.terminal(c, r.listings, r.namus_resolved, r.candidates, r.articles,
+                          r.news_candidates))
     body = report.render_note(c, r.listings, r.namus_resolved, r.namus_modified,
-                              r.candidates, r.articles, datetime.now().astimezone())
+                              r.candidates, r.articles, datetime.now().astimezone(),
+                              r.news_candidates)
     path = report.write_note(c, body)
     print(f"\n   note: {path}")
     return 2 if r.failures else 0
@@ -294,6 +296,17 @@ def cmd_watch(args: argparse.Namespace) -> int:
         if fresh:
             changes.append(f"{len(fresh)} new article(s): {fresh[0].title[:70]}")
         st.seen_articles = list(dict.fromkeys(st.seen_articles + [a.key for a in r.articles]))
+        # Strong candidates are surfaced on their own track, never folded into
+        # `changes`: a confirmed mention and an unverified lead must not arrive
+        # in the same words. Only the strong ones are recorded as seen, so a
+        # weak candidate that later gains a corroboration still gets its turn.
+        known = set(st.seen_news_candidates)
+        new_strong = [c for c in scan_mod.strong_candidates(r)
+                      if c.article.key not in known]
+        st.seen_news_candidates = list(dict.fromkeys(
+            st.seen_news_candidates + [c.article.key for c in new_strong]))
+    else:
+        new_strong = []
     if "namus_unidentified" not in r.failures:
         top = [cand.record.case_id for cand in r.candidates[:10]]
         new_candidates = [x for x in top if x not in set(st.top_candidates)]
@@ -314,15 +327,25 @@ def cmd_watch(args: argparse.Namespace) -> int:
     st.save()
 
     body = report.render_note(c, r.listings, r.namus_resolved, r.namus_modified,
-                              r.candidates, r.articles, datetime.now().astimezone())
+                              r.candidates, r.articles, datetime.now().astimezone(),
+                              r.news_candidates)
     note_path = report.write_note(c, body)
+    link = f"obsidian://open?vault=Exobrain&file={note_path.stem}"
 
     if changes:
-        _notify(" | ".join(changes), f"{c.display_name}: case update",
-                f"obsidian://open?vault=Exobrain&file={note_path.stem}")
+        _notify(" | ".join(changes), f"{c.display_name}: case update", link)
         print("CHANGED:\n  " + "\n  ".join(changes))
-    else:
+    elif not new_strong:
         print(f"no change ({report.days_missing(c)} days missing)")
+
+    for cand in new_strong[:3]:
+        _notify(f"{cand.article.title[:110]} (agrees: "
+                f"{', '.join(cand.corroborates)}; name not printed)",
+                f"{c.display_name}: possible coverage, UNVERIFIED", link)
+    if new_strong:
+        print(f"POSSIBLE COVERAGE ({len(new_strong)}, unverified):")
+        for cand in new_strong:
+            print(f"  [{', '.join(cand.corroborates)}] {cand.article.title[:70]}")
     return 2 if r.failures else 0
 
 
