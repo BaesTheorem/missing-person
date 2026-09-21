@@ -1,0 +1,108 @@
+#!/opt/homebrew/bin/python3
+"""Report how often the news-candidate track actually fires.
+
+The candidate track promotes a local missing-person story that never printed
+the name, on two or more agreements with case facts. Two was a judgement made
+against a single cold-start sample (4 strong out of 116 articles swept, all
+four real). Whether it is the right number is an empirical question about the
+STEADY-STATE rate, which that sample could not answer.
+
+This reads the firings the watcher timestamps into case history and says what
+the rate actually is. A threshold nobody measures after setting it is a guess
+wearing a number.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO))
+
+from missing_person import case as case_mod  # noqa: E402
+from missing_person import state  # noqa: E402
+
+NOTIFY = Path.home() / "Documents/Exobrain harness/mist-voice/bin/mist-notify"
+
+
+def firings(case_id: str, days: int) -> tuple[list[dict], datetime | None]:
+    """Firings inside the window, and when WATCHING started.
+
+    The denominator is how long the watcher has been recording, not the span
+    between firings. Measuring firing-to-firing means a case that fires once
+    reports a zero-length observation forever and never yields a rate, which
+    is precisely the quiet case the threshold most needs to be judged on.
+    """
+    st = state.load(case_id)
+    if not st.path.exists():
+        raise SystemExit(f"no state for {case_id}; has the watcher run?")
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    out, since = [], None
+    for h in st.history:
+        at = datetime.fromisoformat(h["at"])
+        since = at if since is None else min(since, at)
+        if h.get("kind") == "news_candidate" and at >= cutoff:
+            out.append(h)
+    return out, since
+
+
+def verdict(count: int, days: int, observed: float) -> str:
+    """Say what the number means for the threshold, or that it cannot say yet."""
+    if observed < 3:
+        return ("Too little elapsed time to read a rate. Leave the threshold "
+                "alone and look again once a fortnight of runs has landed.")
+    per_week = count / (observed / 7)
+    if per_week > 3:
+        return (f"{per_week:.1f}/week is more than a safety net should ask you "
+                "to read. Consider requiring three agreements, or dropping "
+                "agency to a half-point so it cannot pair with weekday alone.")
+    if count == 0:
+        return ("Nothing fired. Expected on a dormant case, but confirm the "
+                "news source is answering (mp watch prints its failures) "
+                "before reading silence as quiet.")
+    return f"{per_week:.1f}/week is a readable rate. Threshold looks right."
+
+
+def _sole_case() -> str:
+    """The configured case, when there is exactly one that is not the example."""
+    real = [c for c in case_mod.available() if c != "example"]
+    if len(real) == 1:
+        return real[0]
+    raise SystemExit(f"name a case: {', '.join(real) or '(none configured)'}")
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    # No default case id: real case ids are case data and this repo is public.
+    ap.add_argument("case", nargs="?", help="case id; inferred when only one "
+                    "real case is configured")
+    ap.add_argument("--days", type=int, default=7)
+    ap.add_argument("--notify", action="store_true")
+    args = ap.parse_args()
+    case_id = args.case or _sole_case()
+
+    hits, since = firings(case_id, args.days)
+    observed = (datetime.now(timezone.utc) - since).days if since else 0
+    line = (f"{len(hits)} strong news candidate(s) in {args.days}d "
+            f"({observed}d of watching)")
+    print(f"== {case_id}: candidate firing rate ==")
+    print(f"   {line}")
+    for h in hits:
+        local = datetime.fromisoformat(h["at"]).astimezone()
+        print(f"   {local:%Y-%m-%d}  {h['detail'][:88]}")
+    say = verdict(len(hits), args.days, observed)
+    print(f"\n   {say}")
+
+    if args.notify and NOTIFY.exists():
+        import subprocess
+        subprocess.run([str(NOTIFY), f"{line}. {say}",
+                        f"{case_id}: candidate rate", "", "console"], check=False)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
