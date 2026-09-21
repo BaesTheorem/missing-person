@@ -305,6 +305,12 @@ def cmd_watch(args: argparse.Namespace) -> int:
                       if c.article.key not in known]
         st.seen_news_candidates = list(dict.fromkeys(
             st.seen_news_candidates + [c.article.key for c in new_strong]))
+        # Timestamped, because the firing RATE is what decides whether the
+        # two-agreement threshold is set right, and a bare count of seen keys
+        # cannot answer that after the fact.
+        for cand in new_strong:
+            st.note("news_candidate",
+                    f"[{', '.join(cand.corroborates)}] {cand.article.title[:90]}")
     else:
         new_strong = []
     if "namus_unidentified" not in r.failures:
