@@ -271,6 +271,10 @@ def cmd_watch(args: argparse.Namespace) -> int:
     A source that did not answer is NOT read as 'no change' and NOT read as a
     change either. Its previous value is kept, the failure is counted, and a
     source that has failed on consecutive runs becomes a finding of its own.
+
+    Exits non-zero on that finding, not on the single miss that produced it.
+    One dropped request still prints to stderr and still lands in the launchd
+    log; it just does not raise an alarm that the next run clears.
     """
     c = _case(args)
     st = state.load(c.id)
@@ -323,7 +327,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
     for source in ("mshp", "namus_case", "namus_unidentified", "news"):
         if source in r.failures:
             st.source_failures[source] = st.source_failures.get(source, 0) + 1
-            if st.source_failures[source] >= 2:
+            if st.source_failures[source] >= state.ESCALATE_AFTER:
                 changes.append(f"{source} has failed {st.source_failures[source]} runs running")
         else:
             st.source_failures[source] = 0
@@ -352,7 +356,11 @@ def cmd_watch(args: argparse.Namespace) -> int:
         print(f"POSSIBLE COVERAGE ({len(new_strong)}, unverified):")
         for cand in new_strong:
             print(f"  [{', '.join(cand.corroborates)}] {cand.article.title[:70]}")
-    return 2 if r.failures else 0
+    down = state.escalated(st)
+    if down:
+        print(f"   !! down {state.ESCALATE_AFTER}+ runs running: {', '.join(down)}",
+              file=sys.stderr)
+    return 2 if down else 0
 
 
 def main() -> int:

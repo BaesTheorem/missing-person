@@ -33,6 +33,7 @@ from missing_person.net import SourceError
 from missing_person import documents as docs_mod
 from missing_person.sources import mshp, news
 from missing_person.sources.namus import UnidentifiedRecord
+from missing_person import state as state_mod
 
 TERMS = ["Example Person"]
 SURNAME = "Person"
@@ -428,3 +429,19 @@ def test_scan_reports_active_when_feed_answers(example: case_mod.Case, monkeypat
     monkeypatch.setattr(scan_mod.news, "scan", lambda *a, **k: ([], []))
     r = scan_mod.run(example)
     assert r.ncic_active(example) is True
+
+
+# --- one miss is weather, two is an outage ----------------------------------
+
+def test_single_miss_does_not_escalate() -> None:
+    """The watcher's exit code reads this. A feed that dropped one request and
+    answered on the next run used to leave a FAIL in the session-start report
+    until someone went and read a log to find nothing wrong."""
+    st = state_mod.CaseState(case_id="example", source_failures={"mshp": 1, "news": 0})
+    assert state_mod.escalated(st) == []
+
+
+def test_consecutive_misses_escalate() -> None:
+    st = state_mod.CaseState(case_id="example",
+                             source_failures={"mshp": 2, "news": 0, "namus_case": 5})
+    assert state_mod.escalated(st) == ["mshp", "namus_case"]

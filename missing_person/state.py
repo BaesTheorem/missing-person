@@ -14,6 +14,13 @@ from typing import Any
 
 STATE_DIR = Path(__file__).resolve().parent.parent / "state"
 
+# Consecutive misses before a source counts as an outage instead of weather.
+# These feeds drop a request now and then: MSHP timed out on the 2026-09-20
+# 08:15 run and answered the same URL in 0.45s that evening. A watcher that
+# exits non-zero on one miss puts a FAIL in the next session-start report for
+# something that already fixed itself, which trains the reader to skip it.
+ESCALATE_AFTER = 2
+
 
 @dataclass
 class CaseState:
@@ -77,3 +84,12 @@ def load(case_id: str) -> CaseState:
         checked_at=raw.get("checked_at", ""),
         history=list(raw.get("history", [])),
     )
+
+
+def escalated(st: CaseState) -> list[str]:
+    """Sources that have missed ESCALATE_AFTER runs running.
+
+    The watcher's exit code keys off this, not off whether a single request
+    failed, so a red run means a feed is actually down.
+    """
+    return sorted(s for s, n in st.source_failures.items() if n >= ESCALATE_AFTER)
